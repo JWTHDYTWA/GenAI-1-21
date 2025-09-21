@@ -3,6 +3,30 @@ import torch
 from transformers import pipeline, TextGenerationPipeline
 
 
+def text_pipeline_init(lm:str, padding:str):
+    """
+    Создаёт экземпляр пайплайна для генерации текста с заданной моделью и настройками.
+
+    Args:
+        lm (str): Имя или путь к языковой модели.
+        padding (str): Тип выравнивания токенов ('left' или 'right').
+
+    Returns:
+        TextGenerationPipeline: Инициализированный пайплайн для генерации текста.
+    """
+    # Прим.: Qwen3, в отличии от Gemma, не является Gated моделью и не требует токена HuggingFace
+    pipe = pipeline(
+        task="text-generation",
+        model=lm,
+        # Для автоматического подбора следующих параметров используется библиотека `accelerate`
+        device_map="auto",
+        dtype="auto"
+    )
+    # Левый padding нужен чтобы модель не теряла контекст при обработке списка
+    pipe.tokenizer.padding_side = padding
+    return pipe
+
+
 def inference(style:str, input:str|list[str], pipe: TextGenerationPipeline):
     """
     Перефразирует входной текст в указанном стиле с использованием заданного пайплайна.
@@ -22,6 +46,13 @@ def inference(style:str, input:str|list[str], pipe: TextGenerationPipeline):
     message = None
     answer = None
 
+    if not isinstance(style, str):
+        raise TypeError('Аргумент style должен иметь тип str.')
+    if not isinstance(pipe, TextGenerationPipeline):
+        raise TypeError('Аргумент pipe должен иметь тип TextGenerationPipeline.')
+
+    # Разные алгоритмы для обработки одиночной строки и списка строк
+
     if isinstance(input, str):
         message = [
             {'role': 'system', 'content': f'Твоя задача — перефразировать в указанном стиле текст, который присылает пользователь. Не добавляй ничего от себя, даже кавычки.'},
@@ -40,14 +71,15 @@ def inference(style:str, input:str|list[str], pipe: TextGenerationPipeline):
             )
         answer = pipe(message, batch_size=16)
         answer = [ a[0]['generated_text'][-1]['content'] for a in answer ]
+
     else:
         raise TypeError('Параметр input должен принимать строку или список строк.')
     
     return answer
 
 # Привязка к конкретной модели вызвана отличающимся форматом данных у разных моделей (проверено).
-# Это может сломать индексацию контейнеров и потребовать переписывать код.
-model_name = "Qwen/Qwen3-4B-Instruct-2507"
+# При переключении модели может сломаться индексация контейнеров, из-за чего потребуется переписывать код.
+MODEL_NAME = "Qwen/Qwen3-4B-Instruct-2507"
 
 def main():
 
@@ -64,16 +96,7 @@ def main():
     # Инициализация пайплайна модели
 
     try:
-        # Прим.: Qwen3, в отличии от Gemma, не является Gated моделью и не требует токена HuggingFace
-        pipe_instance = pipeline(
-            task="text-generation",
-            model=model_name,
-            # Для автоматического подбора следующих параметров используется библиотека `accelerate`
-            device_map="auto",
-            dtype="auto"
-        )
-        pipe_instance.tokenizer.padding_side = 'left'
-
+        pipe_instance = text_pipeline_init(MODEL_NAME, padding='left')
         print('Модель успешно инициализирована.')
     except Exception as e:
         print(f'\033[31mПроизошла ошибка при инициализации модели:\n{e}\033[0m')
@@ -81,9 +104,7 @@ def main():
 
     
     if args.realtime:
-
         # Режим реального времени (диалог)
-
         while True:
             text = input('Введите фразу: ')
             if text == ':q':
@@ -95,9 +116,7 @@ def main():
                 except Exception as e:
                     print(f'Ошибка обработки текста:\n{e}')
     else:
-
         # Режим обработки файла
-
         try:
             with open(args.input_file, 'r', encoding='utf-8') as f:
                 lines = f.read().splitlines()
