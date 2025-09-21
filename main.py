@@ -1,30 +1,118 @@
+import argparse
 import torch
-from transformers import pipeline
-
-models = {
-    "q3": "Qwen/Qwen3-4B-Instruct-2507",
-    "g2": "google/gemma-2-2b"
-}
-
-print('Initializing a pipeline...')
-pipe = pipeline(
-    task="text-generation",
-    model=models["q3"],
-    device_map="auto",
-    dtype="auto",
-)
-print('A pipeline has been initialized.')
+from transformers import pipeline, TextGenerationPipeline
 
 
-style = 'деловом'
-while True:
-    text = input('Введите фразу: ')
-    if text == ':q':
-        break
-    else:
+def inference(style:str, input:str|list[str], pipe: TextGenerationPipeline):
+    """
+    Перефразирует входной текст в указанном стиле с использованием заданного пайплайна.
+
+    Args:
+        style (str): Стиль, в котором необходимо перефразировать текст.
+        input (str | list[str]): Строка или список строк для обработки.
+        pipe (TextGenerationPipeline): Инициализированный пайплайн TextGenerationPipeline из библиотеки transformers.
+
+    Returns:
+        list[str]: Список перефразированных текстов.
+
+    Raises:
+        TypeError: Если параметр `input` не является строкой или списком строк.
+    """
+
+    message = None
+    answer = None
+
+    if isinstance(input, str):
         message = [
-            {'role': 'system', 'content': f'Твоя задача — перефразировать текст, который присылает пользователь, в {style} стиле. Не добавляй ничего от себя, даже кавычки.'},
-            {'role': 'user', 'content': f'Текст: "{text}"'}
+            {'role': 'system', 'content': f'Твоя задача — перефразировать в указанном стиле текст, который присылает пользователь. Не добавляй ничего от себя, даже кавычки.'},
+            {'role': 'user', 'content': f'Текст: "{input}"\nСтиль: {style}'}
         ]
         answer = pipe(message)[0]['generated_text'][-1]['content']
-        print(answer)
+
+    elif isinstance(input, list):
+        message = []
+        for ln in input:
+            message.append(
+                [
+                    {'role': 'system', 'content': f'Твоя задача — перефразировать в указанном стиле текст, который присылает пользователь. Не добавляй ничего от себя, даже кавычки.'},
+                    {'role': 'user', 'content': f'Текст: "{ln}"\nСтиль: {style}'}
+                ]
+            )
+        answer = pipe(message, batch_size=16)
+        answer = [ a[0]['generated_text'][-1]['content'] for a in answer ]
+    else:
+        raise TypeError('Параметр input должен принимать строку или список строк.')
+    
+    return answer
+
+# Привязка к конкретной модели вызвана отличающимся форматом данных у разных моделей (проверено).
+# Это может сломать индексацию контейнеров и потребовать переписывать код.
+model_name = "Qwen/Qwen3-4B-Instruct-2507"
+
+def main():
+
+    # Используется библиотека argparse для обработки параметров командной строки
+    # Описание параметров командной строки можно получить, вызвав программу с ключом -h:
+    # ./main.py -h
+    parser = argparse.ArgumentParser('GenAI-1-21')
+    parser.add_argument('input_file', nargs='?', default='input.txt', help='Путь к входному файлу. По умолчанию - "input.txt".')
+    parser.add_argument('-o', '--output', default='output.txt', help='Путь к выходному файлу. По умолчанию - "output.txt".')
+    parser.add_argument('-r', '--realtime', action='store_true', help='Запуск в режиме реального времени.')
+    parser.add_argument('-s', '--style', default='официальный', help='Выбор стиля, в котором будет переписан текст. По умолчанию - "официальный".')
+    args = parser.parse_args()
+
+    # Инициализация пайплайна модели
+
+    try:
+        # Прим.: Qwen3, в отличии от Gemma, не является Gated моделью и не требует токена HuggingFace
+        pipe_instance = pipeline(
+            task="text-generation",
+            model=model_name,
+            # Для автоматического подбора следующих параметров используется библиотека `accelerate`
+            device_map="auto",
+            dtype="auto"
+        )
+        pipe_instance.tokenizer.padding_side = 'left'
+
+        print('Модель успешно инициализирована.')
+    except Exception as e:
+        print(f'\033[31mПроизошла ошибка при инициализации модели:\n{e}\033[0m')
+        exit(1)
+
+    
+    if args.realtime:
+
+        # Режим реального времени (диалог)
+
+        while True:
+            text = input('Введите фразу: ')
+            if text == ':q':
+                break
+            else:
+                try:
+                    answer = inference(args.style, text, pipe_instance)
+                    print(answer + '\n')
+                except Exception as e:
+                    print(f'Ошибка обработки текста:\n{e}')
+    else:
+
+        # Режим обработки файла
+
+        try:
+            with open(args.input_file, 'r', encoding='utf-8') as f:
+                lines = f.read().splitlines()
+
+            # Передача входных данных модели и получение ответа
+            answer = inference(args.style, lines, pipe_instance)
+
+            with open(args.output, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(answer))
+            
+        except FileNotFoundError as e:
+            print(f'\033[31mОшибка открытия файла:\n{e}\033[0m')
+        except Exception as e:
+            print(f'\033[31mОшибка обработки файла:\n{e}\033[0m')
+
+
+if __name__ == '__main__':
+    main()
