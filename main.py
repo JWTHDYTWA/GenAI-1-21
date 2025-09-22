@@ -27,7 +27,7 @@ def text_pipeline_init(lm:str, padding:str):
     return pipe
 
 
-def inference(style:str, input:str|list[str], pipe: TextGenerationPipeline, token_limit=None, len_limit=None):
+def inference(style:str, input:str|list[str], pipe: TextGenerationPipeline, token_limit:int|None=None, len_limit:int|None=None):
     """
     Перефразирует входной текст в указанном стиле с использованием заданного пайплайна.
 
@@ -35,11 +35,11 @@ def inference(style:str, input:str|list[str], pipe: TextGenerationPipeline, toke
         style (str): Стиль, в котором необходимо перефразировать текст.
         input (str | list[str]): Строка или список строк для обработки.
         pipe (TextGenerationPipeline): Инициализированный пайплайн TextGenerationPipeline из библиотеки transformers.
-        token_limit (int): Ограничение на количество выходных токенов модели.
-        len_limit (int): Максимальная длина одной входной строки.
+        token_limit (int|None): Ограничение на количество выходных токенов модели.
+        len_limit (int|None): Максимальная длина одной входной строки.
 
     Returns:
-        list[str]: Список перефразированных текстов.
+        str|list[str]: Перефразированный текст или их список.
 
     Raises:
         TypeError: Если один из параметров не соответствует ожидаемому типу.
