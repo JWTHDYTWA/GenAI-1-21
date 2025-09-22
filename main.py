@@ -1,5 +1,4 @@
 import argparse
-import torch
 from transformers import pipeline, TextGenerationPipeline
 
 
@@ -14,7 +13,6 @@ def text_pipeline_init(lm:str, padding:str):
     Returns:
         TextGenerationPipeline: Инициализированный пайплайн для генерации текста.
     """
-    # Прим.: Qwen3, в отличии от Gemma, не является Gated моделью и не требует токена HuggingFace
     pipe = pipeline(
         task="text-generation",
         model=lm,
@@ -27,7 +25,7 @@ def text_pipeline_init(lm:str, padding:str):
     return pipe
 
 
-def inference(style:str, input:str|list[str], pipe: TextGenerationPipeline):
+def inference(style:str, input:str|list[str], pipe: TextGenerationPipeline, token_limit=None):
     """
     Перефразирует входной текст в указанном стиле с использованием заданного пайплайна.
 
@@ -54,43 +52,59 @@ def inference(style:str, input:str|list[str], pipe: TextGenerationPipeline):
     # Разные алгоритмы для обработки одиночной строки и списка строк
 
     if isinstance(input, str):
+        if input.strip() == '':
+            raise ValueError('Входная строка не должна быть пустой или состоять только из пробелов.')
         message = [
             {'role': 'system', 'content': f'Твоя задача — перефразировать в указанном стиле текст, который присылает пользователь. Не добавляй ничего от себя, даже кавычки.'},
             {'role': 'user', 'content': f'Текст: "{input}"\nСтиль: {style}'}
         ]
-        answer = pipe(message)[0]['generated_text'][-1]['content']
+        answer = pipe(message, max_new_tokens=token_limit)[0]['generated_text'][-1]['content']
 
     elif isinstance(input, list):
         message = []
         for ln in input:
-            message.append(
-                [
-                    {'role': 'system', 'content': f'Твоя задача — перефразировать в указанном стиле текст, который присылает пользователь. Не добавляй ничего от себя, даже кавычки.'},
-                    {'role': 'user', 'content': f'Текст: "{ln}"\nСтиль: {style}'}
-                ]
-            )
-        answer = pipe(message, batch_size=16)
+            if not isinstance(ln, str):
+                continue
+            elif ln.strip() == '':
+                # К сожалению, сложно оставить разделяющие строки
+                # чтобы сохранить структуру входного файла, поэтому
+                # они просто пропускаются.
+                continue
+            else:
+                message.append(
+                    [
+                        {'role': 'system', 'content': f'Твоя задача — перефразировать в указанном стиле текст, который присылает пользователь. Не добавляй ничего от себя, даже кавычки.'},
+                        {'role': 'user', 'content': f'Текст: "{ln}"\nСтиль: {style}'}
+                    ]
+                )
+        if not message:
+            raise ValueError('Список запросов не должен быть пустым.')
+        answer = pipe(message, batch_size=16, max_new_tokens=token_limit)
         answer = [ a[0]['generated_text'][-1]['content'] for a in answer ]
 
     else:
-        raise TypeError('Параметр input должен принимать строку или список строк.')
+        raise TypeError('Аргумент input должен принимать строку или список строк.')
     
     return answer
 
 # Привязка к конкретной модели вызвана отличающимся форматом данных у разных моделей (проверено).
 # При переключении модели может сломаться индексация контейнеров, из-за чего потребуется переписывать код.
+# Примечание: Qwen3, в отличии от Gemma, не является Gated моделью и не требует токена HuggingFace
 MODEL_NAME = "Qwen/Qwen3-4B-Instruct-2507"
+DEFAULT_STYLE = "Официальный"
+MAX_TOKENS = 50
 
 def main():
 
     # Используется библиотека argparse для обработки параметров командной строки
-    # Описание параметров командной строки можно получить, вызвав программу с ключом -h:
+    # Описание параметров командной строки можно получить, вызвав программу с флагом -h:
     # ./main.py -h
     parser = argparse.ArgumentParser('GenAI-1-21')
     parser.add_argument('input_file', nargs='?', default='input.txt', help='Путь к входному файлу. По умолчанию - "input.txt".')
     parser.add_argument('-o', '--output', default='output.txt', help='Путь к выходному файлу. По умолчанию - "output.txt".')
     parser.add_argument('-r', '--realtime', action='store_true', help='Запуск в режиме реального времени.')
-    parser.add_argument('-s', '--style', default='официальный', help='Выбор стиля, в котором будет переписан текст. По умолчанию - "официальный".')
+    parser.add_argument('-s', '--style', default=DEFAULT_STYLE, help=f'Выбор стиля, в котором будет переписан текст. По умолчанию - "{DEFAULT_STYLE}".')
+    parser.add_argument('-t', '--tokens', default=MAX_TOKENS, type=int, help=f'Лимит output-токенов на один запрос. Влияет на длину ответов. По умолчанию - {MAX_TOKENS}.')
     args = parser.parse_args()
 
     # Инициализация пайплайна модели
@@ -105,13 +119,17 @@ def main():
     
     if args.realtime:
         # Режим реального времени (диалог)
+        print('Для выхода из программы введите \033[34m:q\033[0m.')
         while True:
             text = input('Введите фразу: ')
             if text == ':q':
                 break
+            elif text.strip() == '':
+                print('Введена пустая строка.')
+                continue
             else:
                 try:
-                    answer = inference(args.style, text, pipe_instance)
+                    answer = inference(args.style, text, pipe_instance, args.tokens)
                     print(answer + '\n')
                 except Exception as e:
                     print(f'Ошибка обработки текста:\n{e}')
@@ -122,7 +140,7 @@ def main():
                 lines = f.read().splitlines()
 
             # Передача входных данных модели и получение ответа
-            answer = inference(args.style, lines, pipe_instance)
+            answer = inference(args.style, lines, pipe_instance, args.tokens)
 
             with open(args.output, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(answer))
